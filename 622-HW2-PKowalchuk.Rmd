@@ -1,0 +1,516 @@
+---
+title: "CUNY 622 - Homework 2"
+author: "Peter Kowalchuk"
+date: "4/11/2020"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE,warning=FALSE}
+library(kableExtra)
+library(ggplot2)
+
+library(e1071)
+library(MASS)
+library(caret)
+library(naivebayes) 
+library(C50)
+
+library(partykit)
+library(pROC)
+```
+
+#Import Data
+
+```{r}
+data<-read.csv("dataset.csv")
+data %>% kable() %>% kable_styling() %>% scroll_box(width = "800px", height = "400px")
+```
+
+```{r}
+ggplot(data,aes(y=Y,x=X,color=as.factor(label))) + geom_point()
+```
+
+
+#Split data
+
+```{r}
+set.seed(300)
+#Spliting data as training and test set. Using createDataPartition() function from caret
+indxTrain <- createDataPartition(y = data$label,p = 0.75,list = FALSE)
+data_train <- data[indxTrain,]
+data_test <- data[-indxTrain,]
+
+#Checking distibution in origanl data and partitioned data
+prop.table(table(data_train$label)) * 100
+```
+
+
+```{r}
+ggplot(data_train,aes(y=Y,x=X,color=as.factor(label))) + geom_point()
+```
+
+```{r}
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(label))) + geom_point()
+```
+
+#Run Models
+
+##kNN
+
+To determine K we use a "rule of thumb", k is the square rooth of the number of samples
+
+```{r}
+k=round(length(data_train[,1])**0.5,0)
+```
+
+We use the class library to obtain the model. This class does not take non-numeric features, we transfor feature Y to intergers
+
+```{r}
+data_train_knn<-data_train
+data_train_knn$Y<-apply(as.data.frame(data_train_knn$Y),1,utf8ToInt)
+data_test_knn<-data_test
+data_test_knn$Y<-apply(as.data.frame(data_test_knn$Y),1,utf8ToInt)
+```
+
+
+```{r}
+knn_model <- class::knn(cl = data_train$label,
+                  test = data_test_knn[,1:2],
+                  train = data_train_knn[,1:2],
+                  k = 5,
+                  prob = TRUE)
+```
+
+```{r}
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(knn_model))) + geom_point()
+```
+
+**Confusion Matrix**
+
+```{r}
+print("BLACK are positives")
+(confusion_matrix<-table(knn_model,data_test[,3]))
+```
+
+**AUC**
+
+```{r}
+(knn_auc<-roc(data_test$label, attributes(knn_model)$prob)$auc)
+```
+
+**ACC**
+
+```{r}
+(knn_acc<-sum(diag(confusion_matrix))/sum(confusion_matrix))
+```
+
+**TPR**
+
+```{r}
+knn_tp<-confusion_matrix[1,1]
+print(paste("Number of true positives=",knn_tp))
+knn_tpr<-confusion_matrix[1,1]/sum(confusion_matrix[,1])
+print(paste("True positive ratio=",knn_tpr))
+```
+
+**FPR**
+
+```{r}
+knn_fp<-confusion_matrix[2,1]
+print(paste("Number of false positives=",knn_fp))
+knn_fpr<-confusion_matrix[2,1]/sum(confusion_matrix[,1])
+print(paste("False positive ratio=",knn_fpr))
+```
+
+**Best K**
+
+We can use the caret library to check our selection of k. This library can run several k and selects the best performing
+
+```{r}
+knn_model<-train(label~.,data=data_train,method="knn",tuneLength=10)
+knn_model
+```
+
+```{r}
+plot(knn_model)
+```
+
+We see we obtain the same value of k first selected.
+
+We can plot the test prediction and confirm we obtain the same results with this library. 
+
+```{r}
+pred_test<-predict(knn_model,newdata = data_test)
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(pred_test))) + geom_point()
+```
+
+**kNN Results**
+
+```{r}
+results<-data.frame(c(knn_auc,knn_acc,knn_tpr,knn_fpr))
+rownames(results)<-c('AUC','ACC','TPR','FPR')
+colnames(results)<-c('kNN')
+```
+
+
+##Tree
+
+```{r}
+tree_model<-C5.0(label~.,data=data_train)
+tree_model
+```
+
+```{r}
+plot(as.party(tree_model),main = "tree model")
+```
+
+
+```{r}
+pred_test<-predict(tree_model,newdata = data_test)
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(pred_test))) + geom_point()
+```
+
+
+**AUC**
+
+```{r}
+pred_test<-predict(tree_model,newdata = data_test,type="prob")
+as.data.frame(pred_test)$BLACK
+(tree_auc<-roc(data_test$label,as.data.frame(pred_test)$BLACK)$auc)
+```
+
+**ACC**
+
+```{r}
+pred_test<-predict(tree_model,newdata = data_test)
+(tree_acc<-mean(pred_test == data_test$label))
+```
+
+**Confusion Matrix**
+
+```{r}
+pred_test<-predict(tree_model,newdata = data_test)
+print("BLACK are positives")
+(confusion_matrix<-table(pred_test,data_test$label))
+```
+
+**TPR**
+
+```{r}
+print(paste("Number of true positives=",confusion_matrix[1,1]))
+tree_tpr<-confusion_matrix[1,1]/sum(confusion_matrix[,1])
+print(paste("True positive ratio=",tree_tpr))
+```
+
+**FPR**
+
+```{r}
+print(paste("Number of false positives=",confusion_matrix[2,1]))
+tree_fpr<-confusion_matrix[2,1]/sum(confusion_matrix[,1])
+print(paste("False positive ratio=",tree_fpr))
+```
+
+**Tree Results**
+
+```{r}
+results<-cbind(results,data.frame(c(tree_auc,tree_acc,tree_tpr,tree_fpr)))
+colnames(results)<-c('kNN','Tree')
+```
+
+##Naive Bayes
+
+```{r}
+nb_model<-naive_bayes(label~.,data=data_train)
+nb_model
+```
+
+```{r}
+pred_test<-predict(nb_model,data_test)
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(pred_test))) + geom_point()
+```
+
+
+**AUC**
+
+```{r}
+pred_test<-predict(nb_model,data_test,type = "prob")
+as.data.frame(pred_test)$BLACK
+(nb_auc<-roc(data_test$label,as.data.frame(pred_test)$BLACK)$auc)
+```
+
+
+
+**ACC**
+
+```{r}
+pred_test<-predict(nb_model,data_test)
+(nb_acc<-mean(pred_test == data_test$label))
+```
+
+**Confusion Matrix**
+
+```{r}
+print("BLACK are positives")
+(confusion_matrix<-table(pred_test,data_test$label))
+```
+
+**TPR**
+
+```{r}
+print(paste("Number of true positives=",confusion_matrix[1,1]))
+nb_tpr<-confusion_matrix[1,1]/sum(confusion_matrix[,1])
+print(paste("True positive ratio=",nb_tpr))
+```
+
+**FPR**
+
+```{r}
+print(paste("Number of false positives=",confusion_matrix[2,1]))
+nb_fpr<-confusion_matrix[2,1]/sum(confusion_matrix[,1])
+print(paste("False positive ratio=",nb_fpr))
+```
+
+**Naive Bayes Results**
+
+```{r}
+results<-cbind(results,data.frame(c(nb_auc,nb_acc,nb_tpr,nb_fpr)))
+colnames(results)<-c('kNN','Tree','NB')
+```
+
+##LDA
+
+```{r}
+lda_model<-lda(label~.,data=data_train)
+lda_model
+```
+
+```{r}
+pred_test<-predict(lda_model,data_test)[1]$class
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(pred_test))) + geom_point()
+```
+
+
+**AUC**
+
+```{r}
+pred_test<-predict(lda_model,data_test,type = "prob")
+df<-as.data.frame(pred_test$posterior[,1])
+colnames(df)<-c('black')
+(lda_auc<-roc(data_test$label,df$black)$auc)
+```
+
+**ACC**
+
+```{r}
+pred_test<-predict(lda_model,data_test)[1]$class
+(lda_acc<-mean(pred_test == data_test$label))
+```
+
+**Confusion Matrix**
+
+```{r}
+print("BLACK are positives")
+(confusion_matrix<-table(pred_test,data_test$label))
+```
+
+**TPR**
+
+```{r}
+print(paste("Number of true positives=",confusion_matrix[1,1]))
+lda_tpr<-confusion_matrix[1,1]/sum(confusion_matrix[,1])
+print(paste("True positive ratio=",lda_tpr))
+```
+
+**FPR**
+
+```{r}
+print(paste("Number of false positives=",confusion_matrix[2,1]))
+lda_fpr<-confusion_matrix[2,1]/sum(confusion_matrix[,1])
+print(paste("False positive ratio=",lda_fpr))
+```
+
+**LDA Results**
+
+```{r}
+results<-cbind(results,data.frame(c(lda_auc,lda_acc,lda_tpr,lda_fpr)))
+colnames(results)<-c('kNN','Tree','NB','LDA')
+```
+
+##Logistic Regression
+
+```{r}
+lr_model<-glm(label~.,data=data_train,family="binomial"(link="logit"))
+lr_model
+```
+
+```{r}
+pred_training<-predict(lr_model,type="response")
+pred_training[pred_training<0.5]<-0
+pred_training[pred_training>=0.5]<-1
+pred_training[pred_training==0]<-"BLACK"
+pred_training[pred_training==1]<-"BLUE"
+
+pred_test<-predict(lr_model,type="response",newdata = data_test)
+pred_test[pred_test<0.5]<-0
+pred_test[pred_test>=0.5]<-1
+pred_test[pred_test==0]<-"BLACK"
+pred_test[pred_test==1]<-"BLUE"
+
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(pred_test))) + geom_point()
+```
+
+
+**AUC**
+
+```{r}
+pred_test<-predict(lr_model,type="response",newdata = data_test)
+df<-as.data.frame(pred_test)
+colnames(df)<-c('black')
+(lr_auc<-roc(data_test$label,df$black)$auc)
+```
+
+**Confusion Matrix**
+
+```{r}
+pred_test<-predict(lr_model,type="response",newdata = data_test)
+pred_test[pred_test<0.5]<-0
+pred_test[pred_test>=0.5]<-1
+pred_test[pred_test==0]<-"BLACK"
+pred_test[pred_test==1]<-"BLUE"
+
+print("BLACK are positives")
+(confusion_matrix<-table(pred_test,data_test$label))
+```
+
+**ACC**
+
+```{r}
+(lr_acc<-sum(diag(confusion_matrix))/sum(confusion_matrix))
+```
+
+
+**TPR**
+
+```{r}
+print(paste("Number of true positives=",confusion_matrix[1,1]))
+lr_tpr<-confusion_matrix[1,1]/sum(confusion_matrix[,1])
+print(paste("True positive ratio=",lr_tpr))
+```
+
+**FPR**
+
+```{r}
+print(paste("Number of false positives=",confusion_matrix[2,1]))
+lr_fpr<-confusion_matrix[2,1]/sum(confusion_matrix[,1])
+print(paste("False positive ratio=",lr_fpr))
+```
+
+**LR Results**
+
+```{r}
+results<-cbind(results,data.frame(c(lr_auc,lr_acc,lr_tpr,lr_fpr)))
+colnames(results)<-c('kNN','Tree','NB','LDA','LR')
+```
+
+##SVM with RBS Kernel
+
+```{r}
+svm_model<-svm(label ~ ., data = data_train,cost=5, cross=10,type="C-classification",kernel="radial",na.action=na.omit)
+svm_model
+```
+
+```{r}
+pred_test<- predict(svm_model, data_test)
+ggplot(data_test,aes(y=Y,x=X,color=as.factor(pred_test))) + geom_point()
+```
+
+
+**AUC**
+
+```{r}
+
+class1.svm.model <- svm(label ~ ., data = data_train,cost=20, cross=10,type="C-classification",kernel="radial",na.action=na.omit)
+class1.svm.pred <- predict(class1.svm.model, data_test)
+finalmatrix<-data.matrix(svm_model, rownames.force = F)
+
+test<-table(pred = pred_test, true = data_test[,3])
+
+confusionMatrix(test)
+```
+
+```{r}
+roc_svm_test <- roc(response = data_test$label, predictor =as.numeric(pred_test))
+(svm_auc<-roc_svm_test$auc)
+```
+
+
+**ACC**
+
+```{r}
+svm_model<-svm(label~.,data=data_train,kernel="radial",cost=5)
+(svm_acc<-mean(pred_test == data_test$label))
+```
+
+**Confusion Matrix**
+
+```{r}
+print("BLACK are positives")
+(confusion_matrix<-table(pred_test,data_test$label))
+```
+
+**TPR**
+
+```{r}
+print(paste("Number of true positives=",confusion_matrix[1,1]))
+svm_tpr<-confusion_matrix[1,1]/sum(confusion_matrix[,1])
+print(paste("True positive ratio=",svm_tpr))
+```
+
+**FPR**
+
+```{r}
+print(paste("Number of false positives=",confusion_matrix[2,1]))
+svm_fpr<-confusion_matrix[2,1]/sum(confusion_matrix[,1])
+print(paste("False positive ratio=",svm_fpr))
+```
+
+```{r}
+results<-cbind(results,data.frame(c(svm_auc,svm_acc,svm_tpr,svm_fpr)))
+colnames(results)<-c('kNN','Tree','NB','LDA','LR','SVM')
+```
+
+#Summary classifier performance
+
+Summarize and provide a explanatory commentary on the observed performance of these classifiers
+
+```{r}
+results %>% kable() %>% kable_styling() %>% scroll_box(width = "800px")
+```
+
+At first glance it will seem that all classifiers have similar performance. But a second look shows more details. First to keep in mind, metrics were computed agains a rather small sample size, the test set, with only 8 samples. This is a very small set, so small changes in performance affect the metrics substantially. 
+
+On all classifiers we see accuracy around 0.5, which isn’t very good. When we look at the test samples we see that even if we missed all the samples and classify all tin the same class, accuracy would still be around 0.5. This is because of the distribution of samples in the test set. We easily see this in the Tree classifier. So although accuracy is similar to others, a look at true positives and false positives reveals its poor performance, especially compared to others.
+
+With this in mind, we find the best performing classifiers are LDA, LR and SVM. A closer look reveals SVM is the best performing. Even as the accuracy is comparable to others, true positives and false negatives shows better performance. 
+
+
+#Classifier Performance differences
+
+What aspects of the data and or aspects of the algorithms, explain these performance differences
+
+A quick look at the scattered plots for the entire dataset and the training and test sets reveals how it isn’t really easy to draw linear classifiers to serrate the different classes. We see many samples of different classes intertwined between each other.This makes it harder for several of these classifier to properly assign classes. 
+
+kNN for example needs to be able to find groups of samples of the same class, this is hard when many samples are isolated. 
+
+At the other extreme, classifiers such as SVM with a non linear kernel do better at classifying this kind of data, mainly because the kernel allows the classifier work in higher dimension that now do show the data segregated. 
+
+What is particularly interesting is how the logistic regression seems to show good performance. This is not a classifier that is good at data which can’t be serrated linearly. The better performance could be due to the reduced test set and its distribution between classes.
+
